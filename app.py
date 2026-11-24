@@ -474,66 +474,6 @@ with tabs["Fieldwork progress"]:
                           xaxis_range=[0, e["Households"].max() * 1.15 if len(e) else 1])
         st.plotly_chart(fig, width="stretch")
 
-    # sample by location stratum (forest-surrounding vs forest-adjacent)
-    st.markdown("##### Interviews by location stratum, per kebele")
-    strat = all_hh.groupby(["kebele", "s0_16"]).size().unstack(fill_value=0)
-    drawn_s = all_hh.groupby("kebele")[["s0_18_drawn_surrounding", "s0_18_drawn_adjacent"]].max()
-    stbl = prog[["code", "Woreda", "Kebele"]].copy()
-    stbl["Surrounding done"] = stbl["code"].map(strat.get("1", pd.Series(dtype=int))).fillna(0).astype(int)
-    stbl["Surrounding drawn"] = stbl["code"].map(drawn_s["s0_18_drawn_surrounding"])
-    stbl["Adjacent done"] = stbl["code"].map(strat.get("2", pd.Series(dtype=int))).fillna(0).astype(int)
-    stbl["Adjacent drawn"] = stbl["code"].map(drawn_s["s0_18_drawn_adjacent"])
-    stbl = stbl[(stbl["Surrounding done"] + stbl["Adjacent done"]) > 0]
-    if len(stbl):
-        st.dataframe(stbl.drop(columns="code").sort_values(["Woreda", "Kebele"]), hide_index=True,
-                     width="stretch", column_config={c: st.column_config.NumberColumn(format="%d")
-                                                     for c in ["Surrounding drawn", "Adjacent drawn"]})
-        st.caption("Drawn = households drawn from the listing, as recorded at 0.18.")
-    else:
-        st.info("No interviews yet.")
-
-    daily = hh.groupby("date").size().reset_index(name="Households")
-    if len(daily):
-        daily = daily.sort_values("date")
-        daily["Cumulative"] = daily["Households"].cumsum()
-        c5, c6 = st.columns([3, 2], gap="large")
-        with c5:
-            fig = go.Figure()
-            fig.add_scatter(x=daily["date"], y=daily["Cumulative"], mode="lines+markers",
-                            line=dict(color=FOREST, width=3, shape="spline"), fill="tozeroy",
-                            fillcolor="rgba(75,174,68,0.18)", marker=dict(size=7, color=FIELD),
-                            customdata=daily["Households"], name="Interviewed",
-                            hovertemplate="%{x|%d %b}: %{customdata} interviews<br>Total %{y}<extra></extra>")
-            last = daily.iloc[-1]
-            fig.add_annotation(x=last["date"], y=last["Cumulative"], text=f"<b>{int(last['Cumulative'])}</b>",
-                               showarrow=False, yshift=16, font=dict(color=FOREST, size=14))
-            if target:
-                fig.add_hline(y=target, line_dash="dot", line_color=FLAME,
-                              annotation_text=f"Target {target}", annotation_position="top left",
-                              annotation_font_color=FLAME)
-            fig.update_layout(title="Cumulative households interviewed", height=360, showlegend=False,
-                              yaxis=dict(title="", rangemode="tozero"),
-                              xaxis=dict(title="", tickformat="%d %b"))
-            st.plotly_chart(fig, width="stretch")
-            avg = daily["Households"].tail(3).mean()
-            msg = f"Last 3 days: about {avg:.0f} interviews per day."
-            if target and avg > 0 and last["Cumulative"] < target:
-                msg += f" At this pace, about {int(-(-(target - last['Cumulative']) // avg))} more field days to reach the target."
-            st.caption(msg)
-        with c6:
-            hm = hh.groupby(["woreda_lbl", "date"]).size().unstack(fill_value=0)
-            hm = hm.reindex(sorted(hm.columns), axis=1)
-            fig = go.Figure(go.Heatmap(
-                z=hm.values, x=[d.strftime("%d %b") for d in hm.columns], y=hm.index,
-                colorscale=[[0, PALE], [0.01, MINT], [0.5, FIELD], [1, FOREST]],
-                text=hm.values, texttemplate="%{text}", textfont=dict(size=12),
-                hovertemplate="%{y}, %{x}: %{z} interviews<extra></extra>", showscale=False,
-                xgap=3, ygap=3))
-            fig.update_layout(title="Interviews per day, by woreda", height=360,
-                              xaxis=dict(title="", side="bottom", showgrid=False),
-                              yaxis=dict(title="", showgrid=False, autorange="reversed"))
-            st.plotly_chart(fig, width="stretch")
-
     pts = hh.dropna(subset=["lat", "lon"])
     if len(pts):
         fig = px.scatter_map(pts, lat="lat", lon="lon", zoom=6, height=520, color="woreda_lbl",
