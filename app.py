@@ -97,7 +97,7 @@ NUMERIC_VARS = (["B2_total", "B2_male", "B2_female", "B3_dependency", "B5", "B17
 CODE_VARS = (["A1", "B4", "B6", "B8", "B9", "B10", "B12", "C6", "D1", "E1", "F15_producer",
               "s0_14", "s0_16", "s0_20_exposed", "cluster", "region", "zone", "woreda", "kebele",
               "enumerator", "supervisor"] + H1_ITEMS)
-NEEDED = (list(BREAKDOWNS) + ["A1", "B8", "B9", "B10", "B12", "C6", "D1", "D2", "E1",
+NEEDED = (list(BREAKDOWNS) + ["start", "end", "A1", "B8", "B9", "B10", "B12", "C6", "D1", "D2", "E1",
                               "F15_producer", "s0_20_exposed", "gps_coord", "today",
                               "date_of_interviiew", "supervisor"] + NUMERIC_VARS)
 
@@ -204,6 +204,14 @@ def prepare(raw, questions, choices):
         if c + "_lbl" not in d.columns:
             d[c + "_lbl"] = d[c]
         d[c + "_lbl"] = d[c + "_lbl"].fillna("Missing")
+    # interview length from the start/end timestamps (the O1 calculation is often blank)
+    if "start" in d and "end" in d:
+        t0 = pd.to_datetime(d["start"], errors="coerce", utc=True)
+        t1 = pd.to_datetime(d["end"], errors="coerce", utc=True)
+        d["duration_min"] = ((t1 - t0).dt.total_seconds() / 60).round(1)
+    else:
+        d["duration_min"] = pd.NA
+    d["duration_min"] = pd.to_numeric(d["duration_min"], errors="coerce").fillna(d["O1_duration_minutes"])
     sub = pd.to_datetime(d["_submission_time"], errors="coerce")
     d["date"] = (pd.to_datetime(d["date_of_interviiew"], errors="coerce")
                  .fillna(pd.to_datetime(d["today"], errors="coerce")).fillna(sub).dt.date)
@@ -495,9 +503,9 @@ with tabs["Fieldwork progress"]:
 with tabs["Data quality"]:
     SHORT = 45      # minutes: flag interviews shorter than this
     dq = hh.copy()
-    dur = dq["O1_duration_minutes"].where(dq["O1_duration_minutes"].between(0, 24 * 60))
+    dur = dq["duration_min"].where(dq["duration_min"].between(0, 24 * 60))
     k = st.columns(4)
-    k[0].metric("Median duration", fmt(median_of(dur)[0], "min"), help="O1_duration_minutes (end – start)")
+    k[0].metric("Median duration", fmt(median_of(dur)[0], "min"), help="Form end time minus start time")
     k[1].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
     k[2].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
     k[3].metric("Refusal rate", fmt(pct(df["A1"] == "2", df["A1"].notna())[0], "%"),
@@ -543,14 +551,15 @@ with tabs["Data quality"]:
                        "farm_africa_interviews_to_check.csv", "text/csv")
 
     with st.expander("Data check: variables the dashboard expects"):
-        st.caption("If a chart is empty, look here. 'Not in Ona data' means the name differs from the "
-                   "form or the question was not deployed; 'All empty' usually means it is skipped "
-                   "for every household so far.")
+        st.caption("If a chart is empty, look here. Ona leaves out questions that nobody has answered, "
+                   "so 'No answers yet' usually means the question was skipped for every household so far "
+                   "(for example F15a, which is asked only when coffee was sold). If it stays like this "
+                   "after many interviews, the name may differ from the deployed form.")
         rows = []
         for v in sorted(set(NEEDED) - {"lat", "lon"}):
             if v not in raw_names:
-                status = "Not in Ona data"
-            elif hh[v].isna().all():
+                status = "No answers yet"
+            elif v in hh and hh[v].isna().all():
                 status = "All empty"
             else:
                 status = "OK"
