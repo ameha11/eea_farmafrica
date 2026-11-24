@@ -12,6 +12,8 @@ Run:
   python -m streamlit run app.py
 """
 
+import re
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -93,10 +95,24 @@ NUMERIC_VARS = (["B2_total", "B2_male", "B2_female", "B3_dependency", "B5", "B17
                  "O1_duration_minutes", "s0_18_drawn_total", "s0_18_drawn_surrounding", "s0_18_drawn_adjacent", "ntfp_producer", "forest_seller",
                  "any_shock", "lat", "lon"]
                 + [f"B1{b}_{s}" for b in AGE_BANDS for s in ("m", "f")])
+# Filter ("gate") questions and the answer that skips the follow-up questions.
+# An enumerator who picks the skip answer much more often than others may be shortening interviews.
+GATES = {"C1": "0", "C4": "2", "C6": "0", "C7": "0", "C11": "0", "C12": "0", "E1": "0", "E2": "0",
+         "E11": "0", "F3": "0", "F15_producer": "0", "H3": "0", "I4": "0", "K1": "0", "K6": "0",
+         "L6a": "0", "N2": "0", "N4": "0", "N12": "0", "A6": "2", "J0_consent": "0", "P1_available": "0",
+         **{f"D4a_{i}": "0" for i in range(1, 11)}, **{f"F1a_{i}": "0" for i in range(1, 12)}}
+GATE_LABELS = {"C1": "C1 Land", "C4": "C4 Certificate", "C6": "C6 Forest use", "C7": "C7 Forest rights",
+               "C11": "C11 Land process", "C12": "C12 Land conflict", "E1": "E1 PFMC exists",
+               "E2": "E2 PFMC member", "E11": "E11 Benefit", "F3": "F3 Crops", "F15_producer": "F15 Coffee",
+               "H3": "H3 Food shortage", "I4": "I4 Fuelwood", "K1": "K1 Credit", "K6": "K6 Incentive",
+               "L6a": "L6a Forest coping", "N2": "N2 Office used", "N4": "N4 Complaint",
+               "N12": "N12 Past project", "A6": "A6 Woman available", "J0_consent": "J0 Woman module",
+               "P1_available": "P1 Youth module", "D4a": "D4a NTFPs (10)", "F1a": "F1a Activities (11)"}
+
 # Select questions whose codes the dashboard compares directly
 CODE_VARS = (["A1", "B4", "B6", "B8", "B9", "B10", "B12", "C6", "D1", "E1", "F15_producer",
               "s0_14", "s0_16", "s0_20_exposed", "cluster", "region", "zone", "woreda", "kebele",
-              "enumerator", "supervisor"] + H1_ITEMS)
+              "enumerator", "supervisor"] + H1_ITEMS + list(GATES))
 NEEDED = (list(BREAKDOWNS) + ["start", "end", "A1", "B8", "B9", "B10", "B12", "C6", "D1", "D2", "E1",
                               "F15_producer", "s0_20_exposed", "gps_coord", "today",
                               "date_of_interviiew", "supervisor"] + NUMERIC_VARS)
@@ -212,6 +228,29 @@ def prepare(raw, questions, choices):
     else:
         d["duration_min"] = pd.NA
     d["duration_min"] = pd.to_numeric(d["duration_min"], errors="coerce").fillna(d["O1_duration_minutes"])
+    # questions answered (Ona leaves unanswered questions out)
+    meta = {"start", "end", "today", "deviceid", "username", "instanceID", "deprecatedID", "formhub", "meta"}
+    qcols = [c for c in d.columns if not c.startswith("_") and c not in meta and not c.endswith("_lbl")
+             and c in questions and questions[c]["type"] not in ("calculate", "note")]
+    d["n_answered"] = d[qcols].notna().sum(axis=1) if qcols else pd.NA
+    # skip answers at gate questions
+    gcols = [g for g in GATES if g in d.columns]
+    if gcols:
+        answered = pd.concat([d[g].notna() for g in gcols], axis=1).sum(axis=1)
+        skipped = pd.concat([d[g] == GATES[g] for g in gcols], axis=1).sum(axis=1)
+        d["gate_answered"], d["gate_skipped"] = answered, skipped
+        d["skip_rate"] = (100 * skipped / answered.where(answered > 0)).round(1)
+    else:
+        d["gate_answered"] = d["gate_skipped"] = d["skip_rate"] = pd.NA
+    # "don't know" answers on select questions
+    dk_cols = []
+    for name, q in questions.items():
+        if name in d.columns and q["type"] in ("select one", "select_one"):
+            codes = [c for c, lab in choice_map(name).items()
+                     if lab and re.search(r"don.?t know|do not know|unknown", str(lab), re.I)]
+            if codes:
+                dk_cols.append(d[name].isin(codes))
+    d["n_dont_know"] = pd.concat(dk_cols, axis=1).sum(axis=1) if dk_cols else 0
     sub = pd.to_datetime(d["_submission_time"], errors="coerce")
     d["date"] = (pd.to_datetime(d["date_of_interviiew"], errors="coerce")
                  .fillna(pd.to_datetime(d["today"], errors="coerce")).fillna(sub).dt.date)
@@ -504,22 +543,60 @@ with tabs["Data quality"]:
     SHORT = 45      # minutes: flag interviews shorter than this
     dq = hh.copy()
     dur = dq["duration_min"].where(dq["duration_min"].between(0, 24 * 60))
+    all_skip = dq["gate_skipped"].sum() / dq["gate_answered"].sum() * 100 if dq["gate_answered"].sum() else None
     k = st.columns(4)
-    k[0].metric("Median duration", fmt(median_of(dur)[0], "min"), help="Form end time minus start time")
-    k[1].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
-    k[2].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
-    k[3].metric("Refusal rate", fmt(pct(df["A1"] == "2", df["A1"].notna())[0], "%"),
-                help="A1 = No, among households visited (sidebar filters applied)")
+    k[0].metric("Skip answers", fmt(None if all_skip is None else round(all_skip, 1), "%"),
+                help="Share of filter questions (C1, C6, F3, F15, K1, D4a, F1a …) answered with the "
+                     "answer that skips the follow-up questions")
+    k[1].metric("Don't know per interview", fmt(mean_of(dq["n_dont_know"])[0]),
+                help="Average number of 'Don't know' answers per interview")
+    k[2].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
+    k[3].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
+
+    st.markdown("##### Enumerator comparison")
+    st.caption("Each enumerator against the team. ⚠ marks a value far from the team: skip answers 15 points "
+               "above the team, 'don't know' twice the team rate, or questions answered / duration below 75% "
+               "of the team median. A flag is a reason to check, not proof of a problem: some kebeles really "
+               "have fewer forest users or coffee growers.")
+    team = {"skip": all_skip or 0, "dk": dq["n_dont_know"].mean(), "nq": dq["n_answered"].median(),
+            "dur": dur.median()}
+    by_e = dq.assign(dur=dur).groupby("enumerator_lbl").agg(
+        Interviews=("dur", "size"), gs=("gate_skipped", "sum"), ga=("gate_answered", "sum"),
+        DK=("n_dont_know", "mean"), NQ=("n_answered", "median"), Minutes=("dur", "median"),
+        Short=("dur", lambda x: int((x < SHORT).sum()))).reset_index()
+    by_e["Skip answers %"] = (100 * by_e["gs"] / by_e["ga"].where(by_e["ga"] > 0)).round(0)
+    by_e["Flags"] = ""
+    by_e.loc[by_e["Skip answers %"] > team["skip"] + 15, "Flags"] += "⚠ skips  "
+    if team["dk"] and team["dk"] > 0:
+        by_e.loc[by_e["DK"] > 2 * team["dk"], "Flags"] += "⚠ don't know  "
+    if pd.notna(team["nq"]):
+        by_e.loc[by_e["NQ"] < 0.75 * team["nq"], "Flags"] += "⚠ few questions  "
+    if pd.notna(team["dur"]):
+        by_e.loc[by_e["Minutes"] < 0.75 * team["dur"], "Flags"] += "⚠ fast  "
+    show = by_e.rename(columns={"enumerator_lbl": "Enumerator", "DK": "Don't know / interview",
+                                "NQ": "Questions answered (median)", "Minutes": "Median minutes",
+                                "Short": f"Under {SHORT} min"})
+    show = show[["Enumerator", "Interviews", "Skip answers %", "Don't know / interview",
+                 "Questions answered (median)", "Median minutes", f"Under {SHORT} min", "Flags"]]
+    st.dataframe(show.sort_values("Skip answers %", ascending=False).round(1), hide_index=True,
+                 width="stretch",
+                 column_config={"Skip answers %": st.column_config.ProgressColumn(
+                     "Skip answers %", format="%d%%", min_value=0, max_value=100)})
 
     c1, c2 = st.columns(2)
     with c1:
-        by_e = dq.assign(dur=dur).groupby("enumerator_lbl").agg(
-            Interviews=("dur", "size"), Median_min=("dur", "median"),
-            Short=("dur", lambda s: int((s < SHORT).sum()))).reset_index()
-        by_e = by_e.rename(columns={"enumerator_lbl": "Enumerator", "Median_min": "Median minutes",
-                                    "Short": f"Under {SHORT} min"}).sort_values("Median minutes")
-        st.markdown("##### Interview duration by enumerator")
-        st.dataframe(by_e.round(0), hide_index=True, width="stretch")
+        e = by_e.dropna(subset=["Skip answers %"]).sort_values("Skip answers %")
+        if len(e):
+            colors = [FLAME if v > team["skip"] + 15 else FIELD for v in e["Skip answers %"]]
+            fig = go.Figure(go.Bar(x=e["Skip answers %"], y=e["enumerator_lbl"], orientation="h",
+                                   marker_color=colors, text=e["Skip answers %"].map(lambda v: f"{v:.0f}%"),
+                                   textposition="outside", cliponaxis=False,
+                                   hovertemplate="%{y}: %{x:.0f}%<extra></extra>"))
+            fig.add_vline(x=team["skip"], line_dash="dash", line_color=NIGHT,
+                          annotation_text=f"Team {team['skip']:.0f}%", annotation_position="top")
+            fig.update_layout(title="Skip answers at filter questions, by enumerator", height=max(360, 28 * len(e) + 110),
+                              xaxis=dict(range=[0, 105], title=""), yaxis_title="")
+            st.plotly_chart(fig, width="stretch")
     with c2:
         if dur.notna().any():
             fig = px.histogram(dur.clip(upper=240), nbins=24, title="Interview duration (minutes, capped at 240)",
@@ -527,6 +604,32 @@ with tabs["Data quality"]:
             fig.add_vline(x=SHORT, line_dash="dash", line_color=FLAME)
             fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Interviews")
             st.plotly_chart(fig, width="stretch")
+
+    # which filter questions each enumerator skips
+    rows = {}
+    for g_key, g_lab in GATE_LABELS.items():
+        cols = [c for c in GATES if c == g_key or c.startswith(g_key + "_")] if g_key in ("D4a", "F1a") else [g_key]
+        cols = [c for c in cols if c in dq.columns]
+        if not cols:
+            continue
+        ans = pd.concat([dq[c].notna() for c in cols], axis=1).sum(axis=1)
+        skp = pd.concat([dq[c] == GATES[c] for c in cols], axis=1).sum(axis=1)
+        agg = pd.DataFrame({"e": dq["enumerator_lbl"], "a": ans, "s": skp}).groupby("e").sum()
+        if agg["a"].sum() > 0:
+            rows[g_lab] = (100 * agg["s"] / agg["a"].where(agg["a"] > 0)).round(0)
+    if rows:
+        hm = pd.DataFrame(rows).T
+        fig = go.Figure(go.Heatmap(z=hm.values, x=hm.columns, y=hm.index, zmin=0, zmax=100,
+                                   colorscale=[[0, PALE], [0.5, SUNSHINE], [1, FLAME]],
+                                   text=hm.values, texttemplate="%{text:.0f}", showscale=False,
+                                   hovertemplate="%{x} · %{y}: %{z:.0f}% skip answer<extra></extra>",
+                                   xgap=2, ygap=2))
+        fig.update_layout(title="% skip answer per filter question and enumerator",
+                          height=max(420, 24 * len(hm) + 160), xaxis=dict(title="", tickangle=-40),
+                          yaxis=dict(title="", autorange="reversed"))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Compare each column with the others: an enumerator whose column is much darker than "
+                   "colleagues in the same woreda is worth a call.")
 
     st.markdown("##### Refusals by kebele")
     ref = df.groupby("kebele_lbl").agg(Visited=("A1", lambda s: int(s.notna().sum())),
@@ -541,6 +644,8 @@ with tabs["Data quality"]:
     flags.loc[flags["dur"] < SHORT, "Issue"] += f"Under {SHORT} min; "
     flags.loc[flags["lat"].isna(), "Issue"] += "No GPS; "
     flags.loc[(flags["B2_total"] == 0), "Issue"] += "Household size 0; "
+    flags.loc[flags["skip_rate"] >= 85, "Issue"] += "Skip answer at almost every filter; "
+    flags.loc[flags["n_dont_know"] >= 5, "Issue"] += "5+ 'don't know'; "
     flags = flags[flags["Issue"] != ""]
     cols = [c for c in ["_id", "date", "woreda_lbl", "kebele_lbl", "enumerator_lbl", "hh_name", "dur", "Issue"]
             if c in flags]
