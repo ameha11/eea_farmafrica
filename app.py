@@ -359,14 +359,16 @@ for var, label in MAIN_VARS.items():
     if pick:
         df = df[df[var + "_lbl"].astype(str).isin(pick)]
 
-# Data quality tab only for people who know the password (DQ_PASSWORD in secrets)
-st.sidebar.divider()
+# Data quality tab: hidden from everyone. The password box appears only when the
+# link ends with ?admin=1, and the tab opens only with the right DQ_PASSWORD.
 DQ_PASSWORD = st.secrets.get("DQ_PASSWORD", "")
-pw = st.sidebar.text_input("Data quality password", type="password",
-                           help="Enter the password to see the Data quality tab")
-SHOW_DQ = bool(DQ_PASSWORD) and pw == DQ_PASSWORD
-if pw and not SHOW_DQ:
-    st.sidebar.error("Wrong password")
+SHOW_DQ = False
+if st.query_params.get("admin") == "1":
+    st.sidebar.divider()
+    pw = st.sidebar.text_input("Admin password", type="password")
+    SHOW_DQ = bool(DQ_PASSWORD) and pw == DQ_PASSWORD
+    if pw and not SHOW_DQ:
+        st.sidebar.error("Wrong password")
 
 hh = df[df["A1"] == "1"]          # consented interviews
 all_hh = data[data["A1"] == "1"]
