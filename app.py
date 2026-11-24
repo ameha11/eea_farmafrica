@@ -583,6 +583,29 @@ if SHOW_DQ:
           st.caption("Compare each column with the others: an enumerator whose column is much darker than "
                      "colleagues in the same woreda is worth a call.")
 
+      pts = hh.dropna(subset=["lat", "lon"])
+      if len(pts):
+          base = st.segmented_control("Map view", ["Satellite", "Street"], default="Satellite", key="map_view")
+          zoom = 13 if pts["kebele"].nunique() == 1 else (10 if pts["woreda"].nunique() == 1 else 7)
+          fig = px.scatter_map(pts, lat="lat", lon="lon", zoom=zoom, height=560, color="woreda_lbl",
+                               center=dict(lat=pts["lat"].mean(), lon=pts["lon"].mean()),
+                               hover_name="kebele_lbl", hover_data={"enumerator_lbl": True, "date": True,
+                                                                   "lat": False, "lon": False},
+                               labels={"enumerator_lbl": "Enumerator", "woreda_lbl": "Woreda"},
+                               title="Interview locations (GPS)")
+          fig.update_traces(marker=dict(size=9, opacity=0.85))
+          if base == "Street":
+              fig.update_layout(map_style="carto-positron")
+          else:   # Esri World Imagery satellite tiles
+              fig.update_layout(map_style="white-bg", map_layers=[dict(
+                  below="traces", sourcetype="raster", sourceattribution="Esri, Maxar, Earthstar Geographics",
+                  source=["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"])])
+              fig.update_traces(marker=dict(size=10, opacity=0.95))
+          fig.update_layout(margin=dict(l=0, r=0, t=50, b=0))
+          st.plotly_chart(fig, width="stretch")
+      else:
+          st.info("No GPS points yet (0.9 is optional and captured only with permission).")
+
       st.markdown("##### Refusals by kebele")
       ref = df.groupby("kebele_lbl").agg(Visited=("A1", lambda s: int(s.notna().sum())),
                                          Refused=("A1", lambda s: int((s == "2").sum()))).reset_index()
