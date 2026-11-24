@@ -500,8 +500,8 @@ with tabs["Data quality"]:
     k[0].metric("Median duration", fmt(median_of(dur)[0], "min"), help="O1_duration_minutes (end – start)")
     k[1].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
     k[2].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
-    k[3].metric("Duplicate household IDs", int(dq["hh_id"].duplicated(keep=False).sum())
-                if "hh_id" in dq else 0)
+    k[3].metric("Refusal rate", fmt(pct(df["A1"] == "2", df["A1"].notna())[0], "%"),
+                help="A1 = No, among households visited (sidebar filters applied)")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -532,11 +532,9 @@ with tabs["Data quality"]:
     flags["Issue"] = ""
     flags.loc[flags["dur"] < SHORT, "Issue"] += f"Under {SHORT} min; "
     flags.loc[flags["lat"].isna(), "Issue"] += "No GPS; "
-    if "hh_id" in flags:
-        flags.loc[flags["hh_id"].duplicated(keep=False) & flags["hh_id"].notna(), "Issue"] += "Duplicate HH ID; "
     flags.loc[(flags["B2_total"] == 0), "Issue"] += "Household size 0; "
     flags = flags[flags["Issue"] != ""]
-    cols = [c for c in ["_id", "date", "woreda_lbl", "kebele_lbl", "enumerator_lbl", "hh_id", "dur", "Issue"]
+    cols = [c for c in ["_id", "date", "woreda_lbl", "kebele_lbl", "enumerator_lbl", "hh_name", "dur", "Issue"]
             if c in flags]
     flags_out = flags[cols].rename(columns={"woreda_lbl": "Woreda", "kebele_lbl": "Kebele",
                                             "enumerator_lbl": "Enumerator", "dur": "Minutes"})
