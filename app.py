@@ -359,6 +359,15 @@ for var, label in MAIN_VARS.items():
     if pick:
         df = df[df[var + "_lbl"].astype(str).isin(pick)]
 
+# Data quality tab only for people who know the password (DQ_PASSWORD in secrets)
+st.sidebar.divider()
+DQ_PASSWORD = st.secrets.get("DQ_PASSWORD", "")
+pw = st.sidebar.text_input("Data quality password", type="password",
+                           help="Enter the password to see the Data quality tab")
+SHOW_DQ = bool(DQ_PASSWORD) and pw == DQ_PASSWORD
+if pw and not SHOW_DQ:
+    st.sidebar.error("Wrong password")
+
 hh = df[df["A1"] == "1"]          # consented interviews
 all_hh = data[data["A1"] == "1"]
 
@@ -383,8 +392,8 @@ k[2].metric("Target (so far)", f"{target:,}" if target else "–",
 k[3].metric("Kebeles visited", f"{hh['kebele'].nunique()} of {len(KEBELE_WOREDA)}")
 k[4].metric("Woredas covered", f"{hh['woreda'].nunique()} of {N_WOREDAS}")
 
-tab_names = ["Fieldwork progress", "Data quality", "Household profile",
-             "Forest & livelihoods", "Food security", "Explore a question"]
+tab_names = ["Fieldwork progress"] + (["Data quality"] if SHOW_DQ else []) + [
+    "Household profile", "Forest & livelihoods", "Food security", "Explore a question"]
 tabs = dict(zip(tab_names, st.tabs(tab_names)))
 
 # ---------------------------------------------------------------- fieldwork
@@ -539,140 +548,141 @@ with tabs["Fieldwork progress"]:
         st.info("No GPS points yet (0.9 is optional and captured only with permission).")
 
 # ---------------------------------------------------------------- data quality
-with tabs["Data quality"]:
-    SHORT = 45      # minutes: flag interviews shorter than this
-    dq = hh.copy()
-    dur = dq["duration_min"].where(dq["duration_min"].between(0, 24 * 60))
-    all_skip = dq["gate_skipped"].sum() / dq["gate_answered"].sum() * 100 if dq["gate_answered"].sum() else None
-    k = st.columns(4)
-    k[0].metric("Skip answers", fmt(None if all_skip is None else round(all_skip, 1), "%"),
-                help="Share of filter questions (C1, C6, F3, F15, K1, D4a, F1a …) answered with the "
-                     "answer that skips the follow-up questions")
-    k[1].metric("Don't know per interview", fmt(mean_of(dq["n_dont_know"])[0]),
-                help="Average number of 'Don't know' answers per interview")
-    k[2].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
-    k[3].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
+if SHOW_DQ:
+  with tabs["Data quality"]:
+      SHORT = 45      # minutes: flag interviews shorter than this
+      dq = hh.copy()
+      dur = dq["duration_min"].where(dq["duration_min"].between(0, 24 * 60))
+      all_skip = dq["gate_skipped"].sum() / dq["gate_answered"].sum() * 100 if dq["gate_answered"].sum() else None
+      k = st.columns(4)
+      k[0].metric("Skip answers", fmt(None if all_skip is None else round(all_skip, 1), "%"),
+                  help="Share of filter questions (C1, C6, F3, F15, K1, D4a, F1a …) answered with the "
+                       "answer that skips the follow-up questions")
+      k[1].metric("Don't know per interview", fmt(mean_of(dq["n_dont_know"])[0]),
+                  help="Average number of 'Don't know' answers per interview")
+      k[2].metric(f"Under {SHORT} min", fmt(pct(dur < SHORT, dur.notna())[0], "%"))
+      k[3].metric("Missing GPS", fmt(pct(dq["lat"].isna(), pd.Series(True, index=dq.index))[0], "%"))
 
-    st.markdown("##### Enumerator comparison")
-    st.caption("Each enumerator against the team. ⚠ marks a value far from the team: skip answers 15 points "
-               "above the team, 'don't know' twice the team rate, or questions answered / duration below 75% "
-               "of the team median. A flag is a reason to check, not proof of a problem: some kebeles really "
-               "have fewer forest users or coffee growers.")
-    team = {"skip": all_skip or 0, "dk": dq["n_dont_know"].mean(), "nq": dq["n_answered"].median(),
-            "dur": dur.median()}
-    by_e = dq.assign(dur=dur).groupby("enumerator_lbl").agg(
-        Interviews=("dur", "size"), gs=("gate_skipped", "sum"), ga=("gate_answered", "sum"),
-        DK=("n_dont_know", "mean"), NQ=("n_answered", "median"), Minutes=("dur", "median"),
-        Short=("dur", lambda x: int((x < SHORT).sum()))).reset_index()
-    by_e["Skip answers %"] = (100 * by_e["gs"] / by_e["ga"].where(by_e["ga"] > 0)).round(0)
-    by_e["Flags"] = ""
-    by_e.loc[by_e["Skip answers %"] > team["skip"] + 15, "Flags"] += "⚠ skips  "
-    if team["dk"] and team["dk"] > 0:
-        by_e.loc[by_e["DK"] > 2 * team["dk"], "Flags"] += "⚠ don't know  "
-    if pd.notna(team["nq"]):
-        by_e.loc[by_e["NQ"] < 0.75 * team["nq"], "Flags"] += "⚠ few questions  "
-    if pd.notna(team["dur"]):
-        by_e.loc[by_e["Minutes"] < 0.75 * team["dur"], "Flags"] += "⚠ fast  "
-    show = by_e.rename(columns={"enumerator_lbl": "Enumerator", "DK": "Don't know / interview",
-                                "NQ": "Questions answered (median)", "Minutes": "Median minutes",
-                                "Short": f"Under {SHORT} min"})
-    show = show[["Enumerator", "Interviews", "Skip answers %", "Don't know / interview",
-                 "Questions answered (median)", "Median minutes", f"Under {SHORT} min", "Flags"]]
-    st.dataframe(show.sort_values("Skip answers %", ascending=False).round(1), hide_index=True,
-                 width="stretch",
-                 column_config={"Skip answers %": st.column_config.ProgressColumn(
-                     "Skip answers %", format="%d%%", min_value=0, max_value=100)})
+      st.markdown("##### Enumerator comparison")
+      st.caption("Each enumerator against the team. ⚠ marks a value far from the team: skip answers 15 points "
+                 "above the team, 'don't know' twice the team rate, or questions answered / duration below 75% "
+                 "of the team median. A flag is a reason to check, not proof of a problem: some kebeles really "
+                 "have fewer forest users or coffee growers.")
+      team = {"skip": all_skip or 0, "dk": dq["n_dont_know"].mean(), "nq": dq["n_answered"].median(),
+              "dur": dur.median()}
+      by_e = dq.assign(dur=dur).groupby("enumerator_lbl").agg(
+          Interviews=("dur", "size"), gs=("gate_skipped", "sum"), ga=("gate_answered", "sum"),
+          DK=("n_dont_know", "mean"), NQ=("n_answered", "median"), Minutes=("dur", "median"),
+          Short=("dur", lambda x: int((x < SHORT).sum()))).reset_index()
+      by_e["Skip answers %"] = (100 * by_e["gs"] / by_e["ga"].where(by_e["ga"] > 0)).round(0)
+      by_e["Flags"] = ""
+      by_e.loc[by_e["Skip answers %"] > team["skip"] + 15, "Flags"] += "⚠ skips  "
+      if team["dk"] and team["dk"] > 0:
+          by_e.loc[by_e["DK"] > 2 * team["dk"], "Flags"] += "⚠ don't know  "
+      if pd.notna(team["nq"]):
+          by_e.loc[by_e["NQ"] < 0.75 * team["nq"], "Flags"] += "⚠ few questions  "
+      if pd.notna(team["dur"]):
+          by_e.loc[by_e["Minutes"] < 0.75 * team["dur"], "Flags"] += "⚠ fast  "
+      show = by_e.rename(columns={"enumerator_lbl": "Enumerator", "DK": "Don't know / interview",
+                                  "NQ": "Questions answered (median)", "Minutes": "Median minutes",
+                                  "Short": f"Under {SHORT} min"})
+      show = show[["Enumerator", "Interviews", "Skip answers %", "Don't know / interview",
+                   "Questions answered (median)", "Median minutes", f"Under {SHORT} min", "Flags"]]
+      st.dataframe(show.sort_values("Skip answers %", ascending=False).round(1), hide_index=True,
+                   width="stretch",
+                   column_config={"Skip answers %": st.column_config.ProgressColumn(
+                       "Skip answers %", format="%d%%", min_value=0, max_value=100)})
 
-    c1, c2 = st.columns(2)
-    with c1:
-        e = by_e.dropna(subset=["Skip answers %"]).sort_values("Skip answers %")
-        if len(e):
-            colors = [FLAME if v > team["skip"] + 15 else FIELD for v in e["Skip answers %"]]
-            fig = go.Figure(go.Bar(x=e["Skip answers %"], y=e["enumerator_lbl"], orientation="h",
-                                   marker_color=colors, text=e["Skip answers %"].map(lambda v: f"{v:.0f}%"),
-                                   textposition="outside", cliponaxis=False,
-                                   hovertemplate="%{y}: %{x:.0f}%<extra></extra>"))
-            fig.add_vline(x=team["skip"], line_dash="dash", line_color=NIGHT,
-                          annotation_text=f"Team {team['skip']:.0f}%", annotation_position="top")
-            fig.update_layout(title="Skip answers at filter questions, by enumerator", height=max(360, 28 * len(e) + 110),
-                              xaxis=dict(range=[0, 105], title=""), yaxis_title="")
-            st.plotly_chart(fig, width="stretch")
-    with c2:
-        if dur.notna().any():
-            fig = px.histogram(dur.clip(upper=240), nbins=24, title="Interview duration (minutes, capped at 240)",
-                               color_discrete_sequence=[FIELD])
-            fig.add_vline(x=SHORT, line_dash="dash", line_color=FLAME)
-            fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Interviews")
-            st.plotly_chart(fig, width="stretch")
+      c1, c2 = st.columns(2)
+      with c1:
+          e = by_e.dropna(subset=["Skip answers %"]).sort_values("Skip answers %")
+          if len(e):
+              colors = [FLAME if v > team["skip"] + 15 else FIELD for v in e["Skip answers %"]]
+              fig = go.Figure(go.Bar(x=e["Skip answers %"], y=e["enumerator_lbl"], orientation="h",
+                                     marker_color=colors, text=e["Skip answers %"].map(lambda v: f"{v:.0f}%"),
+                                     textposition="outside", cliponaxis=False,
+                                     hovertemplate="%{y}: %{x:.0f}%<extra></extra>"))
+              fig.add_vline(x=team["skip"], line_dash="dash", line_color=NIGHT,
+                            annotation_text=f"Team {team['skip']:.0f}%", annotation_position="top")
+              fig.update_layout(title="Skip answers at filter questions, by enumerator", height=max(360, 28 * len(e) + 110),
+                                xaxis=dict(range=[0, 105], title=""), yaxis_title="")
+              st.plotly_chart(fig, width="stretch")
+      with c2:
+          if dur.notna().any():
+              fig = px.histogram(dur.clip(upper=240), nbins=24, title="Interview duration (minutes, capped at 240)",
+                                 color_discrete_sequence=[FIELD])
+              fig.add_vline(x=SHORT, line_dash="dash", line_color=FLAME)
+              fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Interviews")
+              st.plotly_chart(fig, width="stretch")
 
-    # which filter questions each enumerator skips
-    rows = {}
-    for g_key, g_lab in GATE_LABELS.items():
-        cols = [c for c in GATES if c == g_key or c.startswith(g_key + "_")] if g_key in ("D4a", "F1a") else [g_key]
-        cols = [c for c in cols if c in dq.columns]
-        if not cols:
-            continue
-        ans = pd.concat([dq[c].notna() for c in cols], axis=1).sum(axis=1)
-        skp = pd.concat([dq[c] == GATES[c] for c in cols], axis=1).sum(axis=1)
-        agg = pd.DataFrame({"e": dq["enumerator_lbl"], "a": ans, "s": skp}).groupby("e").sum()
-        if agg["a"].sum() > 0:
-            rows[g_lab] = (100 * agg["s"] / agg["a"].where(agg["a"] > 0)).round(0)
-    if rows:
-        hm = pd.DataFrame(rows).T
-        fig = go.Figure(go.Heatmap(z=hm.values, x=hm.columns, y=hm.index, zmin=0, zmax=100,
-                                   colorscale=[[0, PALE], [0.5, SUNSHINE], [1, FLAME]],
-                                   text=hm.values, texttemplate="%{text:.0f}", showscale=False,
-                                   hovertemplate="%{x} · %{y}: %{z:.0f}% skip answer<extra></extra>",
-                                   xgap=2, ygap=2))
-        fig.update_layout(title="% skip answer per filter question and enumerator",
-                          height=max(420, 24 * len(hm) + 160), xaxis=dict(title="", tickangle=-40),
-                          yaxis=dict(title="", autorange="reversed"))
-        st.plotly_chart(fig, width="stretch")
-        st.caption("Compare each column with the others: an enumerator whose column is much darker than "
-                   "colleagues in the same woreda is worth a call.")
+      # which filter questions each enumerator skips
+      rows = {}
+      for g_key, g_lab in GATE_LABELS.items():
+          cols = [c for c in GATES if c == g_key or c.startswith(g_key + "_")] if g_key in ("D4a", "F1a") else [g_key]
+          cols = [c for c in cols if c in dq.columns]
+          if not cols:
+              continue
+          ans = pd.concat([dq[c].notna() for c in cols], axis=1).sum(axis=1)
+          skp = pd.concat([dq[c] == GATES[c] for c in cols], axis=1).sum(axis=1)
+          agg = pd.DataFrame({"e": dq["enumerator_lbl"], "a": ans, "s": skp}).groupby("e").sum()
+          if agg["a"].sum() > 0:
+              rows[g_lab] = (100 * agg["s"] / agg["a"].where(agg["a"] > 0)).round(0)
+      if rows:
+          hm = pd.DataFrame(rows).T
+          fig = go.Figure(go.Heatmap(z=hm.values, x=hm.columns, y=hm.index, zmin=0, zmax=100,
+                                     colorscale=[[0, PALE], [0.5, SUNSHINE], [1, FLAME]],
+                                     text=hm.values, texttemplate="%{text:.0f}", showscale=False,
+                                     hovertemplate="%{x} · %{y}: %{z:.0f}% skip answer<extra></extra>",
+                                     xgap=2, ygap=2))
+          fig.update_layout(title="% skip answer per filter question and enumerator",
+                            height=max(420, 24 * len(hm) + 160), xaxis=dict(title="", tickangle=-40),
+                            yaxis=dict(title="", autorange="reversed"))
+          st.plotly_chart(fig, width="stretch")
+          st.caption("Compare each column with the others: an enumerator whose column is much darker than "
+                     "colleagues in the same woreda is worth a call.")
 
-    st.markdown("##### Refusals by kebele")
-    ref = df.groupby("kebele_lbl").agg(Visited=("A1", lambda s: int(s.notna().sum())),
-                                       Refused=("A1", lambda s: int((s == "2").sum()))).reset_index()
-    ref["Refusal rate %"] = (100 * ref["Refused"] / ref["Visited"].where(ref["Visited"] > 0)).round(0)
-    st.dataframe(ref.rename(columns={"kebele_lbl": "Kebele"}).sort_values("Refusal rate %", ascending=False),
-                 hide_index=True, width="stretch")
+      st.markdown("##### Refusals by kebele")
+      ref = df.groupby("kebele_lbl").agg(Visited=("A1", lambda s: int(s.notna().sum())),
+                                         Refused=("A1", lambda s: int((s == "2").sum()))).reset_index()
+      ref["Refusal rate %"] = (100 * ref["Refused"] / ref["Visited"].where(ref["Visited"] > 0)).round(0)
+      st.dataframe(ref.rename(columns={"kebele_lbl": "Kebele"}).sort_values("Refusal rate %", ascending=False),
+                   hide_index=True, width="stretch")
 
-    st.markdown("##### Interviews to check")
-    flags = dq.assign(dur=dur.round(0))
-    flags["Issue"] = ""
-    flags.loc[flags["dur"] < SHORT, "Issue"] += f"Under {SHORT} min; "
-    flags.loc[flags["lat"].isna(), "Issue"] += "No GPS; "
-    flags.loc[(flags["B2_total"] == 0), "Issue"] += "Household size 0; "
-    flags.loc[flags["skip_rate"] >= 85, "Issue"] += "Skip answer at almost every filter; "
-    flags.loc[flags["n_dont_know"] >= 5, "Issue"] += "5+ 'don't know'; "
-    flags = flags[flags["Issue"] != ""]
-    cols = [c for c in ["_id", "date", "woreda_lbl", "kebele_lbl", "enumerator_lbl", "hh_name", "dur", "Issue"]
-            if c in flags]
-    flags_out = flags[cols].rename(columns={"woreda_lbl": "Woreda", "kebele_lbl": "Kebele",
-                                            "enumerator_lbl": "Enumerator", "dur": "Minutes"})
-    st.dataframe(flags_out, hide_index=True, width="stretch")
-    st.download_button("Download this list (CSV)", flags_out.to_csv(index=False).encode("utf-8-sig"),
-                       "farm_africa_interviews_to_check.csv", "text/csv")
+      st.markdown("##### Interviews to check")
+      flags = dq.assign(dur=dur.round(0))
+      flags["Issue"] = ""
+      flags.loc[flags["dur"] < SHORT, "Issue"] += f"Under {SHORT} min; "
+      flags.loc[flags["lat"].isna(), "Issue"] += "No GPS; "
+      flags.loc[(flags["B2_total"] == 0), "Issue"] += "Household size 0; "
+      flags.loc[flags["skip_rate"] >= 85, "Issue"] += "Skip answer at almost every filter; "
+      flags.loc[flags["n_dont_know"] >= 5, "Issue"] += "5+ 'don't know'; "
+      flags = flags[flags["Issue"] != ""]
+      cols = [c for c in ["_id", "date", "woreda_lbl", "kebele_lbl", "enumerator_lbl", "hh_name", "dur", "Issue"]
+              if c in flags]
+      flags_out = flags[cols].rename(columns={"woreda_lbl": "Woreda", "kebele_lbl": "Kebele",
+                                              "enumerator_lbl": "Enumerator", "dur": "Minutes"})
+      st.dataframe(flags_out, hide_index=True, width="stretch")
+      st.download_button("Download this list (CSV)", flags_out.to_csv(index=False).encode("utf-8-sig"),
+                         "farm_africa_interviews_to_check.csv", "text/csv")
 
-    with st.expander("Data check: variables the dashboard expects"):
-        st.caption("If a chart is empty, look here. Ona leaves out questions that nobody has answered, "
-                   "so 'No answers yet' usually means the question was skipped for every household so far "
-                   "(for example F15a, which is asked only when coffee was sold). If it stays like this "
-                   "after many interviews, the name may differ from the deployed form.")
-        rows = []
-        for v in sorted(set(NEEDED) - {"lat", "lon"}):
-            if v not in raw_names:
-                status = "No answers yet"
-            elif v in hh and hh[v].isna().all():
-                status = "All empty"
-            else:
-                status = "OK"
-            rows.append({"Variable": v, "Status": status,
-                         "Answered": int(hh[v].notna().sum()) if v in hh else 0})
-        chk = pd.DataFrame(rows)
-        st.dataframe(chk[chk["Status"] != "OK"] if (chk["Status"] != "OK").any() else chk,
-                     hide_index=True, width="stretch")
+      with st.expander("Data check: variables the dashboard expects"):
+          st.caption("If a chart is empty, look here. Ona leaves out questions that nobody has answered, "
+                     "so 'No answers yet' usually means the question was skipped for every household so far "
+                     "(for example F15a, which is asked only when coffee was sold). If it stays like this "
+                     "after many interviews, the name may differ from the deployed form.")
+          rows = []
+          for v in sorted(set(NEEDED) - {"lat", "lon"}):
+              if v not in raw_names:
+                  status = "No answers yet"
+              elif v in hh and hh[v].isna().all():
+                  status = "All empty"
+              else:
+                  status = "OK"
+              rows.append({"Variable": v, "Status": status,
+                           "Answered": int(hh[v].notna().sum()) if v in hh else 0})
+          chk = pd.DataFrame(rows)
+          st.dataframe(chk[chk["Status"] != "OK"] if (chk["Status"] != "OK").any() else chk,
+                       hide_index=True, width="stretch")
 
 # ---------------------------------------------------------------- household profile
 EDU_ORDER = ["No education", "Read and write / religious", "Primary", "Secondary", "TVET or higher"]
