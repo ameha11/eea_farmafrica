@@ -81,10 +81,23 @@ KEBELE_WOREDA = {str(k): str(w) for k, w in [
     (22, 7), (23, 7), (24, 7), (25, 7), (26, 7)]}
 N_WOREDAS = len(set(KEBELE_WOREDA.values()))
 
-# Target households per kebele. Fill in when the sample allocation is final,
-# e.g. {"1": 25, "2": 25, ...}. Kebeles left out use the number of households
-# drawn that enumerators record at 0.18 (largest value reported for the kebele).
-KEBELE_TARGETS = {}
+# Target households per kebele (sample allocation, 24 Nov 2026). Woreda targets are the sums.
+KEBELE_TARGETS = {
+    # Dallo Mana (104)
+    "1": 20, "2": 44, "3": 21, "4": 19,
+    # Goba (49)
+    "5": 18, "6": 15, "7": 16,
+    # Didu (66)
+    "8": 21, "9": 15, "10": 15, "11": 15,
+    # Yeki (135)
+    "12": 41, "13": 37, "14": 36, "15": 21,
+    # Gesha (87)
+    "16": 27, "17": 43, "18": 17,
+    # Shishonde (78)
+    "19": 26, "20": 26, "21": 26,
+    # Bita (87)
+    "22": 17, "23": 16, "24": 20, "25": 19, "26": 15,
+}   # total 606 households
 
 AGE_BANDS = {"a": "0–4", "b": "5–14", "c": "15–17", "d": "18–29", "e": "30–59", "f": "60–64", "g": "65+"}
 H1_ITEMS = [f"H1_{i}" for i in range(1, 13)]
@@ -389,8 +402,8 @@ k = st.columns(5)
 k[0].metric("Households interviewed", f"{len(hh):,}")
 k[1].metric("Refusals", f"{int((df['A1'] == '2').sum()):,}",
             help="A1 = No (sidebar filters applied)")
-k[2].metric("Target (so far)", f"{target:,}" if target else "–",
-            help="Sum of kebele targets. Kebeles without a set target use households drawn (0.18).")
+k[2].metric("Target", f"{target:,}" if target else "–",
+            help="Planned sample: 606 households in 26 kebeles of 7 woredas")
 k[3].metric("Kebeles visited", f"{hh['kebele'].nunique()} of {len(KEBELE_WOREDA)}")
 k[4].metric("Woredas covered", f"{hh['woreda'].nunique()} of {N_WOREDAS}")
 
