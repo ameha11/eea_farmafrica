@@ -491,13 +491,24 @@ with tabs["Fieldwork progress"]:
 
     pts = hh.dropna(subset=["lat", "lon"])
     if len(pts):
-        fig = px.scatter_map(pts, lat="lat", lon="lon", zoom=6, height=520, color="woreda_lbl",
+        base = st.segmented_control("Map view", ["Street", "Satellite"], default="Street",
+                                    key="map_view_field")
+        zoom = 13 if pts["kebele"].nunique() == 1 else (10 if pts["woreda"].nunique() == 1 else 7)
+        fig = px.scatter_map(pts, lat="lat", lon="lon", zoom=zoom, height=520, color="woreda_lbl",
+                             center=dict(lat=pts["lat"].mean(), lon=pts["lon"].mean()),
                              hover_name="kebele_lbl", hover_data={"enumerator_lbl": True,
                                                                  "lat": False, "lon": False},
                              labels={"enumerator_lbl": "Enumerator", "woreda_lbl": "Woreda"},
                              title="Interview locations")
         fig.update_traces(marker=dict(size=9, opacity=0.85))
-        fig.update_layout(map_style="carto-positron", margin=dict(l=0, r=0, t=50, b=0))
+        if base == "Satellite":   # Esri World Imagery satellite tiles
+            fig.update_layout(map_style="white-bg", map_layers=[dict(
+                below="traces", sourcetype="raster", sourceattribution="Esri, Maxar, Earthstar Geographics",
+                source=["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"])])
+            fig.update_traces(marker=dict(size=10, opacity=0.95))
+        else:
+            fig.update_layout(map_style="carto-positron")
+        fig.update_layout(margin=dict(l=0, r=0, t=50, b=0))
         st.plotly_chart(fig, width="stretch")
     else:
         st.info("No GPS points yet (0.9 is optional and captured only with permission).")
